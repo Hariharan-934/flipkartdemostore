@@ -529,7 +529,7 @@ def seed_products(db_session):
         },
     ]
 
-   existing_names = {name for (name,) in db_session.query(Product.name).all()}
+    existing_names = {name for (name,) in db_session.query(Product.name).all()}
     for data in seed_data:
         if data["name"] in existing_names:
             continue
