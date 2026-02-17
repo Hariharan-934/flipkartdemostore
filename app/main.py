@@ -21,13 +21,13 @@ from .models import (
     get_session,
 )
 
-
 logger = logging.getLogger("simple_shop")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
+# Stripe configuration
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
@@ -36,10 +36,10 @@ if STRIPE_SECRET_KEY:
 def create_app() -> FastAPI:
     app = FastAPI(title="Simple E-commerce")
 
-    # Session middleware for cart storage
+    # Session middleware
     app.add_middleware(
         SessionMiddleware,
-        secret_key="change-me-in-production",  # For demo only
+        secret_key=os.getenv("SESSION_SECRET_KEY", "change-me-in-production"),
     )
 
     # Static files and templates
@@ -47,18 +47,13 @@ def create_app() -> FastAPI:
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
     # ---------- Error handlers ----------
-
     @app.exception_handler(HTTPException)
     async def http_exception_handler(request: Request, exc: HTTPException):
         logger.warning("HTTP error %s at %s: %s", exc.status_code, request.url.path, exc.detail)
         status_code = exc.status_code or 500
         return templates.TemplateResponse(
             "error.html",
-            {
-                "request": request,
-                "status_code": status_code,
-                "message": exc.detail or "Something went wrong.",
-            },
+            {"request": request, "status_code": status_code, "message": exc.detail or "Something went wrong."},
             status_code=status_code,
         )
 
@@ -67,19 +62,14 @@ def create_app() -> FastAPI:
         logger.exception("Unhandled error at %s", request.url.path)
         return templates.TemplateResponse(
             "error.html",
-            {
-                "request": request,
-                "status_code": 500,
-                "message": "Internal server error. Please try again later.",
-            },
+            {"request": request, "status_code": 500, "message": "Internal server error. Please try again later."},
             status_code=500,
         )
 
-    # Database setup (includes lightweight migrations like product.category)
+    # Database setup
     engine = get_engine()
     ensure_schema()
 
-    # Seed demo products (idempotent by name)
     with get_session() as db:
         seed_products(db)
 
@@ -93,43 +83,30 @@ def create_app() -> FastAPI:
             return None
         return db.query(User).get(user_id)
 
+    # ---------- Routes ----------
     @app.get("/")
     async def home(request: Request):
         q = request.query_params.get("q") or ""
         selected_category = request.query_params.get("category") or ""
         price_band = request.query_params.get("price") or ""
 
-        # Map simple band ids to numeric ranges
-        price_ranges = {
-            "low": (0, 500),
-            "mid": (500, 1000),
-            "high": (1000, 5000),
-        }
+        price_ranges = {"low": (0, 500), "mid": (500, 1000), "high": (1000, 5000)}
 
         with get_session() as db:
             query = db.query(Product)
             if selected_category:
                 query = query.filter(Product.category == selected_category)
             if q:
-                like = f"%{q}%"
-                query = query.filter(Product.name.ilike(like))
+                query = query.filter(Product.name.ilike(f"%{q}%"))
             if price_band in price_ranges:
                 min_p, max_p = price_ranges[price_band]
                 query = query.filter(Product.price >= min_p, Product.price <= max_p)
 
             products = query.all()
-
-            # Distinct categories for filter strip
-            raw_categories = (
-                db.query(Product.category)
-                .filter(Product.category.isnot(None))
-                .distinct()
-                .all()
-            )
+            raw_categories = db.query(Product.category).filter(Product.category.isnot(None)).distinct().all()
             categories = sorted({row[0] for row in raw_categories})
 
         cart_count = _get_cart_count(request)
-
         return templates.TemplateResponse(
             "index.html",
             {
@@ -142,6 +119,7 @@ def create_app() -> FastAPI:
                 "price_band": price_band,
             },
         )
+
 
     @app.post("/cart/add/{product_id}")
     async def add_to_cart(request: Request, product_id: int):
@@ -551,17 +529,18 @@ def seed_products(db_session):
         },
     ]
 
-    existing_names = {
-        name for (name,) in db_session.query(Product.name).all()
-    }
-
+   existing_names = {name for (name,) in db_session.query(Product.name).all()}
     for data in seed_data:
         if data["name"] in existing_names:
             continue
         db_session.add(Product(**data))
-
     db_session.commit()
 
 
+# ---------- Entry point for Render ----------
 app = create_app()
 
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8000))
+    import uvicorn
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True)
