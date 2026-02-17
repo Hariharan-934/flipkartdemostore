@@ -8,4 +8,4 @@ aiofiles==23.1.0
 pydantic==2.3.0
 requests==2.32.0
 sqlalchemy==2.0.25
-stripe==6.21.0
+stripe==14.4.0
